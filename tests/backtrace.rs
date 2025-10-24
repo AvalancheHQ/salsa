@@ -42,7 +42,7 @@ fn query_f(db: &dyn Database, thing: Thing) -> String {
     query_cycle(db, thing)
 }
 
-#[salsa::tracked(cycle_fn=cycle_fn, cycle_initial=cycle_initial)]
+#[salsa::tracked(cycle_initial=cycle_initial)]
 fn query_cycle(db: &dyn Database, thing: Thing) -> String {
     let backtrace = query_cycle(db, thing);
     if backtrace.is_empty() {
@@ -54,15 +54,6 @@ fn query_cycle(db: &dyn Database, thing: Thing) -> String {
 
 fn cycle_initial(_db: &dyn salsa::Database, _thing: Thing) -> String {
     String::new()
-}
-
-fn cycle_fn(
-    _db: &dyn salsa::Database,
-    _value: &str,
-    _count: u32,
-    _thing: Thing,
-) -> salsa::CycleRecoveryAction<String> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 #[test]
@@ -108,7 +99,7 @@ fn backtrace_works() {
                      at tests/backtrace.rs:32
            1: query_cycle(Id(2))
                      at tests/backtrace.rs:45
-                     cycle heads: query_cycle(Id(2)) -> IterationCount(0)
+                     cycle heads: query_cycle(Id(2)) -> iteration = 0
            2: query_f(Id(2))
                      at tests/backtrace.rs:40
     "#]]
@@ -119,9 +110,9 @@ fn backtrace_works() {
         query stacktrace:
            0: query_e(Id(3)) -> (R1, Durability::LOW)
                      at tests/backtrace.rs:32
-           1: query_cycle(Id(3)) -> (R1, Durability::HIGH, iteration = IterationCount(0))
+           1: query_cycle(Id(3)) -> (R1, Durability::HIGH, iteration = 0)
                      at tests/backtrace.rs:45
-                     cycle heads: query_cycle(Id(3)) -> IterationCount(0)
+                     cycle heads: query_cycle(Id(3)) -> iteration = 0
            2: query_f(Id(3)) -> (R1, Durability::HIGH)
                      at tests/backtrace.rs:40
     "#]]

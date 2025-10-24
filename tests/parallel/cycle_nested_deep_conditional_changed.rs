@@ -15,8 +15,6 @@
 //! Specifically, the maybe_changed_after flow.
 use crate::sync::thread;
 
-use salsa::CycleRecoveryAction;
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, salsa::Update)]
 struct CycleValue(u32);
 
@@ -28,18 +26,18 @@ struct Input {
     value: u32,
 }
 
-#[salsa::tracked(cycle_fn=cycle_fn, cycle_initial=initial)]
+#[salsa::tracked(cycle_initial=initial)]
 fn query_a(db: &dyn salsa::Database, input: Input) -> CycleValue {
     query_b(db, input)
 }
 
-#[salsa::tracked(cycle_fn=cycle_fn, cycle_initial=initial)]
+#[salsa::tracked(cycle_initial=initial)]
 fn query_b(db: &dyn salsa::Database, input: Input) -> CycleValue {
     let c_value = query_c(db, input);
     CycleValue(c_value.0 + input.value(db).max(1)).min(MAX)
 }
 
-#[salsa::tracked(cycle_fn=cycle_fn, cycle_initial=initial)]
+#[salsa::tracked(cycle_initial=initial)]
 fn query_c(db: &dyn salsa::Database, input: Input) -> CycleValue {
     let d_value = query_d(db, input);
 
@@ -53,23 +51,14 @@ fn query_c(db: &dyn salsa::Database, input: Input) -> CycleValue {
     }
 }
 
-#[salsa::tracked(cycle_fn=cycle_fn, cycle_initial=initial)]
+#[salsa::tracked(cycle_initial=initial)]
 fn query_d(db: &dyn salsa::Database, input: Input) -> CycleValue {
     query_c(db, input)
 }
 
-#[salsa::tracked(cycle_fn=cycle_fn, cycle_initial=initial)]
+#[salsa::tracked(cycle_initial=initial)]
 fn query_e(db: &dyn salsa::Database, input: Input) -> CycleValue {
     query_c(db, input)
-}
-
-fn cycle_fn(
-    _db: &dyn salsa::Database,
-    _value: &CycleValue,
-    _count: u32,
-    _input: Input,
-) -> CycleRecoveryAction<CycleValue> {
-    CycleRecoveryAction::Iterate
 }
 
 fn initial(_db: &dyn salsa::Database, _input: Input) -> CycleValue {
@@ -81,7 +70,7 @@ fn the_test() {
     use crate::sync;
     use salsa::Setter as _;
     sync::check(|| {
-        tracing::debug!("New run");
+        tracing::debug!("Starting new run");
 
         // This is a bit silly but it works around https://github.com/awslabs/shuttle/issues/192
         static INITIALIZE: sync::Mutex<Option<(salsa::DatabaseImpl, Input)>> =
@@ -108,36 +97,36 @@ fn the_test() {
         }
 
         let t1 = thread::spawn(move || {
+            let _span = tracing::info_span!("t1", thread_id = ?thread::current().id()).entered();
             let (db, input) = get_db(|db, input| {
                 query_a(db, input);
             });
 
-            let _span = tracing::debug_span!("t1", thread_id = ?thread::current().id()).entered();
-
             query_a(&db, input)
         });
         let t2 = thread::spawn(move || {
+            let _span = tracing::info_span!("t2", thread_id = ?thread::current().id()).entered();
             let (db, input) = get_db(|db, input| {
                 query_b(db, input);
             });
 
-            let _span = tracing::debug_span!("t4", thread_id = ?thread::current().id()).entered();
             query_b(&db, input)
         });
         let t3 = thread::spawn(move || {
+            let _span = tracing::info_span!("t3", thread_id = ?thread::current().id()).entered();
             let (db, input) = get_db(|db, input| {
                 query_d(db, input);
             });
 
-            let _span = tracing::debug_span!("t2", thread_id = ?thread::current().id()).entered();
             query_d(&db, input)
         });
         let t4 = thread::spawn(move || {
+            let _span = tracing::info_span!("t4", thread_id = ?thread::current().id()).entered();
+
             let (db, input) = get_db(|db, input| {
                 query_e(db, input);
             });
 
-            let _span = tracing::debug_span!("t3", thread_id = ?thread::current().id()).entered();
             query_e(&db, input)
         });
 

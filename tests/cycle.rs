@@ -95,18 +95,22 @@ impl Input {
         }
     }
 
+    #[track_caller]
     fn assert(&self, db: &dyn Db, expected: Value) {
         assert_eq!(self.eval(db), expected)
     }
 
+    #[track_caller]
     fn assert_value(&self, db: &dyn Db, expected: u8) {
         self.assert(db, Value::N(expected))
     }
 
+    #[track_caller]
     fn assert_bounds(&self, db: &dyn Db) {
         self.assert(db, Value::OutOfBounds)
     }
 
+    #[track_caller]
     fn assert_count(&self, db: &dyn Db) {
         self.assert(db, Value::TooManyIterations)
     }
@@ -121,6 +125,8 @@ const MAX_ITERATIONS: u32 = 3;
 /// iterating again.
 fn cycle_recover(
     _db: &dyn Db,
+    _id: salsa::Id,
+    _last_provisional_value: &Value,
     value: &Value,
     count: u32,
     _inputs: Inputs,
@@ -436,7 +442,6 @@ fn two_fallback_count() {
 ///
 /// Two-query cycle, falls back but fallback does not converge.
 #[test]
-#[should_panic(expected = "too many cycle iterations")]
 fn two_fallback_diverge() {
     let mut db = DbImpl::new();
     let a_in = Inputs::new(&db, vec![]);
@@ -893,7 +898,7 @@ fn cycle_unchanged() {
 ///
 /// If nothing in a nested cycle changed in the new revision, no part of the cycle should
 /// re-execute.
-#[test]
+#[test_log::test]
 fn cycle_unchanged_nested() {
     let mut db = ExecuteValidateLoggerDatabase::default();
     let a_in = Inputs::new(&db, vec![]);
@@ -978,7 +983,7 @@ fn cycle_unchanged_nested_intertwined() {
             e.assert_value(&db, 60);
         }
 
-        db.assert_logs_len(15 + i);
+        db.assert_logs_len(13 + i);
 
         // next revision, we change only A, which is not part of the cycle and the cycle does not
         // depend on.
@@ -1163,7 +1168,7 @@ fn repeat_query_participating_in_cycle() {
         value: u32,
     }
 
-    #[salsa::tracked(cycle_fn=cycle_recover, cycle_initial=initial)]
+    #[salsa::tracked(cycle_initial=initial)]
     fn head(db: &dyn Db, input: Input) -> u32 {
         let a = query_a(db, input);
 
@@ -1172,15 +1177,6 @@ fn repeat_query_participating_in_cycle() {
 
     fn initial(_db: &dyn Db, _input: Input) -> u32 {
         0
-    }
-
-    fn cycle_recover(
-        _db: &dyn Db,
-        _value: &u32,
-        _count: u32,
-        _input: Input,
-    ) -> CycleRecoveryAction<u32> {
-        CycleRecoveryAction::Iterate
     }
 
     #[salsa::tracked]
@@ -1277,7 +1273,7 @@ fn repeat_query_participating_in_cycle2() {
         value: u32,
     }
 
-    #[salsa::tracked(cycle_fn=cycle_recover, cycle_initial=initial)]
+    #[salsa::tracked(cycle_initial=initial)]
     fn head(db: &dyn Db, input: Input) -> u32 {
         let a = query_a(db, input);
 
@@ -1288,16 +1284,7 @@ fn repeat_query_participating_in_cycle2() {
         0
     }
 
-    fn cycle_recover(
-        _db: &dyn Db,
-        _value: &u32,
-        _count: u32,
-        _input: Input,
-    ) -> CycleRecoveryAction<u32> {
-        CycleRecoveryAction::Iterate
-    }
-
-    #[salsa::tracked(cycle_fn=cycle_recover, cycle_initial=initial)]
+    #[salsa::tracked(cycle_initial=initial)]
     fn query_a(db: &dyn Db, input: Input) -> u32 {
         let _ = query_hot(db, input);
         query_b(db, input)
