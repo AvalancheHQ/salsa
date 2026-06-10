@@ -1,6 +1,6 @@
 use crate::cycle::IterationCount;
 use crate::key::DatabaseKeyIndex;
-use crate::sync::thread::{self, ThreadId};
+use crate::sync::thread::ThreadId;
 use crate::Revision;
 
 /// The `Event` struct identifies various notable things that can
@@ -18,7 +18,7 @@ pub struct Event {
 impl Event {
     pub fn new(kind: EventKind) -> Self {
         Self {
-            thread_id: thread::current().id(),
+            thread_id: crate::sync::current_thread_id(),
             kind,
         }
     }

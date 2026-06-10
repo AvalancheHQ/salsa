@@ -3,7 +3,7 @@ use crate::durability::Durability;
 use crate::function::{SyncGuard, SyncOwner};
 use crate::key::DatabaseKeyIndex;
 use crate::sync::atomic::{AtomicBool, Ordering};
-use crate::sync::thread::{self, ThreadId};
+use crate::sync::thread::ThreadId;
 use crate::sync::Mutex;
 use crate::table::Table;
 use crate::zalsa::Zalsa;
@@ -278,7 +278,7 @@ impl Runtime {
         other_id: ThreadId,
         query_mutex_guard: SyncGuard<'a>,
     ) -> BlockResult<'a> {
-        let thread_id = thread::current().id();
+        let thread_id = crate::sync::current_thread_id();
         // Cycle in the same thread.
         if thread_id == other_id {
             return BlockResult::Cycle;
@@ -389,7 +389,7 @@ impl Runtime {
         DependencyGraph::transfer_lock(
             dg,
             query,
-            thread::current().id(),
+            crate::sync::current_thread_id(),
             new_owner_key,
             new_owner_id,
             guard,
