@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::cycle::{CycleHeads, CycleRecoveryStrategy, IterationCount};
-use crate::function::maybe_changed_after::VerifyCycleHeads;
+use crate::function::maybe_changed_after::{CycleHeadsVec, VerifyCycleHeads};
 use crate::function::memo::Memo;
 use crate::function::sync::ClaimResult;
 use crate::function::{Configuration, IngredientImpl, Reentrancy};
@@ -156,7 +156,7 @@ where
                     return unsafe { Some(self.extend_memo_lifetime(old_memo)) };
                 }
 
-                let mut cycle_heads = Vec::new();
+                let mut cycle_heads = CycleHeadsVec::new();
                 let mut participating_queries = FxHashMap::default();
 
                 let verify_result = self.deep_verify_memo(

@@ -1,4 +1,5 @@
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 #[cfg(feature = "accumulator")]
 use crate::accumulator::accumulated_map::InputAccumulatedValues;
@@ -559,7 +560,7 @@ where
             QueryOriginRef::Derived(edges) => {
                 #[cfg(feature = "accumulator")]
                 let mut inputs = InputAccumulatedValues::Empty;
-                let mut child_cycle_heads = Vec::new();
+                let mut child_cycle_heads = CycleHeadsVec::new();
 
                 // Fully tracked inputs? Iterate over the inputs and check them, one by one.
                 //
@@ -725,6 +726,13 @@ impl ShallowUpdate {
     }
 }
 
+/// Inline storage for cycle heads encountered during verification.
+///
+/// The vast majority of queries participate in no cycles (empty) or a single
+/// cycle, so keeping a small number of heads inline avoids a heap allocation
+/// on the hot verification path.
+pub(super) type CycleHeadsVec = SmallVec<[DatabaseKeyIndex; 2]>;
+
 /// The cycles encountered while verifying if an ingredient has changed after a given revision.
 ///
 /// We use this as an out parameter to avoid increasing the size of [`VerifyResult`].
@@ -740,7 +748,7 @@ impl ShallowUpdate {
 #[derive(Debug)]
 pub struct VerifyCycleHeads<'a> {
     /// The cycle heads encountered while verifying this ingredient and its subtree.
-    heads: &'a mut Vec<DatabaseKeyIndex>,
+    heads: &'a mut CycleHeadsVec,
 
     /// The cached `maybe_changed_after` results for queries that participate in cycles but aren't a cycle head
     /// themselves. We need to cache the results here to avoid calling `deep_verify_memo` repeatedly
@@ -755,7 +763,7 @@ pub struct VerifyCycleHeads<'a> {
 
 impl<'a> VerifyCycleHeads<'a> {
     pub(crate) fn new(
-        heads: &'a mut Vec<DatabaseKeyIndex>,
+        heads: &'a mut CycleHeadsVec,
         participating_queries: &'a mut FxHashMap<DatabaseKeyIndex, VerifyResult>,
     ) -> Self {
         Self {
@@ -797,7 +805,7 @@ impl<'a> VerifyCycleHeads<'a> {
     }
 
     #[inline]
-    fn append_heads(&mut self, heads: &mut Vec<DatabaseKeyIndex>) {
+    fn append_heads(&mut self, heads: &mut CycleHeadsVec) {
         if heads.is_empty() {
             return;
         }
@@ -806,7 +814,7 @@ impl<'a> VerifyCycleHeads<'a> {
     }
 
     #[cold]
-    fn append_heads_slow(&mut self, other: &mut Vec<DatabaseKeyIndex>) {
+    fn append_heads_slow(&mut self, other: &mut CycleHeadsVec) {
         for key in other.drain(..) {
             self.insert_head(key);
         }
