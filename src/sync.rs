@@ -1,5 +1,18 @@
 pub use shim::*;
 
+thread_local! {
+    static THREAD_ID: thread::ThreadId = thread::current().id();
+}
+
+/// Returns the [`ThreadId`](thread::ThreadId) of the current thread.
+///
+/// Caches the id in a thread-local to avoid cloning (and dropping) the `Thread`
+/// handle's internal `Arc` on every call, which is sound as a thread's id is stable.
+#[inline]
+pub fn current_thread_id() -> thread::ThreadId {
+    THREAD_ID.with(|id| *id)
+}
+
 #[cfg(feature = "shuttle")]
 pub mod shim {
     pub use shuttle::sync::*;

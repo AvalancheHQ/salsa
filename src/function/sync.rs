@@ -110,7 +110,7 @@ impl SyncTable {
             }
             std::collections::hash_map::Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(SyncState {
-                    id: SyncOwner::Thread(thread::current().id()),
+                    id: SyncOwner::Thread(crate::sync::current_thread_id()),
                     anyone_waiting: false,
                     is_transfer_target: false,
                     claimed_twice: false,
@@ -135,7 +135,7 @@ impl SyncTable {
     ) -> Result<ClaimResult<'me>, Box<BlockOnTransferredOwner<'me>>> {
         let key_index = *entry.key();
         let database_key_index = DatabaseKeyIndex::new(self.ingredient, key_index);
-        let thread_id = thread::current().id();
+        let thread_id = crate::sync::current_thread_id();
 
         match zalsa
             .runtime()
