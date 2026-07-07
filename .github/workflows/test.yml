@@ -1,9 +1,8 @@
 name: macro-install-debug
 
-# Isolate why `taiki-e/install-action -> cargo-binstall cargo-codspeed` takes ~19s
-# on codspeed-macro but ~1.3s on a GitHub-hosted arm runner. Same steps run on
-# both so the runner is the only variable. Debug logging + network timing probes
-# expose which round-trip is slow.
+# Compare authenticated vs unauthenticated cargo-binstall resolve on codspeed-macro.
+# Hypothesis: install-action sets GITHUB_TOKEN, so binstall uses the GitHub API
+# path, which is the slow one on this runner.
 
 on:
   push:
@@ -15,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  install-timing:
-    name: "install-timing (${{ matrix.runner }})"
+  auth-vs-noauth:
+    name: "auth-vs-noauth (${{ matrix.runner }})"
     strategy:
       fail-fast: false
       matrix:
@@ -24,42 +23,33 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
-      - name: Network reachability + latency probes
-        shell: bash
-        run: |
-          echo "::group::hosts binstall talks to"
-          for host in index.crates.io static.crates.io api.github.com github.com objects.githubusercontent.com; do
-            echo "----- $host -----"
-            getent hosts "$host" || echo "getent: no result"
-            echo "-- timing DNS + TLS + TTFB --"
-            curl -sS -o /dev/null -w "dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s code=%{http_code}\n" \
-              --max-time 30 "https://$host/" || echo "curl failed for $host"
-          done
-          echo "::endgroup::"
-          echo "::group::resolv.conf"
-          cat /etc/resolv.conf || true
-          echo "::endgroup::"
-
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
 
-      - name: Install cargo-codspeed via binstall (debug, timed, x3)
+      - name: binstall resolve — WITH token (install-action's exact invocation)
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN_VALUE: ${{ github.token }}
         run: |
-          cargo binstall -V
           for i in 1 2 3; do
-            echo "::group::iteration $i"
+            echo "::group::AUTH iteration $i"
             rm -f "$HOME/.cargo/bin/cargo-codspeed"
             start=$(date +%s.%N)
-            cargo binstall --no-confirm --log-level debug --force cargo-codspeed 2>&1 || true
+            GITHUB_TOKEN="$GH_TOKEN_VALUE" cargo binstall --force --no-confirm --locked --log-level debug cargo-codspeed 2>&1 || true
             end=$(date +%s.%N)
-            echo "ITER_TIME runner=${{ matrix.runner }} iteration=$i seconds=$(awk "BEGIN{print $end-$start}")"
+            echo "RESULT runner=${{ matrix.runner }} mode=auth iteration=$i seconds=$(awk "BEGIN{print $end-$start}")"
             echo "::endgroup::"
           done
 
-      - name: Install via taiki-e/install-action (matches salsa exactly)
-        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-codspeed
+      - name: binstall resolve — WITHOUT token
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            echo "::group::NOAUTH iteration $i"
+            rm -f "$HOME/.cargo/bin/cargo-codspeed"
+            start=$(date +%s.%N)
+            env -u GITHUB_TOKEN -u GH_TOKEN cargo binstall --force --no-confirm --locked --log-level debug cargo-codspeed 2>&1 || true
+            end=$(date +%s.%N)
+            echo "RESULT runner=${{ matrix.runner }} mode=noauth iteration=$i seconds=$(awk "BEGIN{print $end-$start}")"
+            echo "::endgroup::"
+          done
