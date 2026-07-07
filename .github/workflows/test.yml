@@ -1,198 +1,65 @@
-name: Test
+name: macro-install-debug
+
+# Isolate why `taiki-e/install-action -> cargo-binstall cargo-codspeed` takes ~19s
+# on codspeed-macro but ~1.3s on a GitHub-hosted arm runner. Same steps run on
+# both so the runner is the only variable. Debug logging + network timing probes
+# expose which round-trip is slow.
 
 on:
-  pull_request:
-  merge_group:
   push:
     branches:
-      - master
+      - macro-install-debug
+  workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
-  test:
-    name: Test
-    strategy:
-      matrix:
-        rust:
-          - 1.85.0
-          - stable
-          - beta
-        experimental:
-          - false
-        include:
-          - rust: nightly
-            experimental: true
-    continue-on-error: ${{ matrix.experimental }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Setup Rust toolchain
-        shell: bash
-        run: |
-          if [[ "${{ matrix.rust }}" == "stable" ]]; then
-            rustup component add rustfmt clippy
-          else
-            args=(--component rustfmt --component clippy)
-            if [[ "${{ matrix.rust }}" == "nightly" ]]; then
-              args+=(--allow-downgrade)
-            fi
-            rustup toolchain install "${{ matrix.rust }}" "${args[@]}"
-            rustup override set "${{ matrix.rust }}"
-          fi
-          rustup show active-toolchain
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          save-if: ${{ github.ref == 'refs/heads/master' }}
-      - uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-nextest
-      - name: Format
-        run: cargo fmt -- --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      # TODO: Use something like cargo-hack for more robust feature configuration testing.
-      - name: Clippy / all-features
-        run: cargo clippy --workspace --all-targets --features persistence -- -D warnings
-      - name: Test
-        run: cargo nextest run --workspace --tests --examples --features persistence --no-fail-fast
-      - name: Test Manual Registration / no-default-features
-        run: cargo nextest run --workspace --tests --no-fail-fast --no-default-features --features macros
-      - name: Test docs
-        run: cargo test --workspace --doc
-
-  miri_shards:
-    name: Miri (${{ matrix.partition }})
+  install-timing:
+    name: "install-timing (${{ matrix.runner }})"
     strategy:
       fail-fast: false
       matrix:
-        partition:
-          - slice:1/4
-          - slice:2/4
-          - slice:3/4
-          - slice:4/4
-    runs-on: ubuntu-latest
+        runner: [ubuntu-22.04-arm, codspeed-macro]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install Miri
-        uses: dtolnay/rust-toolchain@miri
-        id: rust-toolchain
-      - name: Select Miri toolchain
-        run: rustup override set "${{ steps.rust-toolchain.outputs.name }}"
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          # Matrix shards share a cache key, so only one can reserve it for saving.
-          save-if: ${{ github.ref == 'refs/heads/master' && matrix.partition == 'slice:1/4' }}
-      - uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-nextest
-      - name: Setup Miri
-        run: cargo miri setup
-      - name: Test with Miri
-        run: cargo miri nextest run --no-fail-fast --tests --partition ${{ matrix.partition }}
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
-      - name: Run examples with Miri
-        if: matrix.partition == 'slice:1/4'
-        run: cargo miri run --example calc
-
-  miri:
-    name: Miri
-    if: always()
-    needs: miri_shards
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check Miri shards
-        run: test "${{ needs.miri_shards.result }}" = success
-
-  shuttle:
-    name: Shuttle
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Setup Rust toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          save-if: ${{ github.ref == 'refs/heads/master' }}
-      - uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-nextest
-      - name: Test with Shuttle
-        run: cargo nextest run --features shuttle --test parallel
-
-  benchmarks-build:
-    # https://github.com/CodSpeedHQ/action/issues/126
-    if: github.repository == 'salsa-rs/salsa' &&github.event_name != 'merge_group'
-    name: Benchmarks (build)
-    runs-on: ubuntu-22.04-arm
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Setup Rust toolchain
-        run: rustup show
-
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          save-if: ${{ github.ref == 'refs/heads/master' }}
-
-      - name: "Setup codspeed"
-        uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
-        with:
-          tool: cargo-codspeed
-
-      - name: "Build benchmarks"
+      - name: Network reachability + latency probes
+        shell: bash
         run: |
-          cargo codspeed build -m simulation -m memory \
-            --bench creation \
-            --bench field_access \
-            --bench query_fetch \
-            --bench accumulator \
-            --bench dataflow \
-            --bench eviction
-          cargo codspeed build -m walltime --bench eviction_walltime
+          echo "::group::hosts binstall talks to"
+          for host in index.crates.io static.crates.io api.github.com github.com objects.githubusercontent.com; do
+            echo "----- $host -----"
+            getent hosts "$host" || echo "getent: no result"
+            echo "-- timing DNS + TLS + TTFB --"
+            curl -sS -o /dev/null -w "dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s code=%{http_code}\n" \
+              --max-time 30 "https://$host/" || echo "curl failed for $host"
+          done
+          echo "::endgroup::"
+          echo "::group::resolv.conf"
+          cat /etc/resolv.conf || true
+          echo "::endgroup::"
 
-      - name: "Upload benchmark binaries"
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: benchmark-binaries
-          compression-level: 1
-          path: target/codspeed
-          if-no-files-found: "error"
-          retention-days: 1
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
 
-  benchmarks:
-    name: Benchmarks
-    runs-on: codspeed-macro
-    timeout-minutes: 10
-    needs: benchmarks-build
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install cargo-codspeed via binstall (debug, timed, x3)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          cargo binstall -V
+          for i in 1 2 3; do
+            echo "::group::iteration $i"
+            rm -f "$HOME/.cargo/bin/cargo-codspeed"
+            start=$(date +%s.%N)
+            cargo binstall --no-confirm --log-level debug --force cargo-codspeed 2>&1 || true
+            end=$(date +%s.%N)
+            echo "ITER_TIME runner=${{ matrix.runner }} iteration=$i seconds=$(awk "BEGIN{print $end-$start}")"
+            echo "::endgroup::"
+          done
 
-      - name: "Setup codspeed"
+      - name: Install via taiki-e/install-action (matches salsa exactly)
         uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
         with:
           tool: cargo-codspeed
-
-      - name: "Download benchmark binaries"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: benchmark-binaries
-          path: target/codspeed
-
-      - name: "Restore binary permissions"
-        run: find target/codspeed -type f -exec chmod +x {} +
-
-      - name: "Run benchmarks"
-        uses: CodSpeedHQ/action@a4a36bb07c0638b0b4ca52bf1f3dad1b4289e52f # v4.18.1
-        with:
-          mode: "simulation,memory,walltime"
-          run: cargo codspeed run
-          token: ${{ secrets.CODSPEED_TOKEN }}
