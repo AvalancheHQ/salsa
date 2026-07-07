@@ -1,8 +1,8 @@
 name: macro-install-debug
 
-# Compare authenticated vs unauthenticated cargo-binstall resolve on codspeed-macro.
-# Hypothesis: install-action sets GITHUB_TOKEN, so binstall uses the GitHub API
-# path, which is the slow one on this runner.
+# Probe api.github.com latency distribution from the macro runner vs a hosted
+# runner. binstall's slow resolve is dominated by calls to this host; if the
+# macro runner sees a latency tail, that is the root cause.
 
 on:
   push:
@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  auth-vs-noauth:
-    name: "auth-vs-noauth (${{ matrix.runner }})"
+  api-latency:
+    name: "api-latency (${{ matrix.runner }})"
     strategy:
       fail-fast: false
       matrix:
@@ -23,33 +23,34 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: binstall resolve — WITH token (install-action's exact invocation)
+      - name: Probe api.github.com (REST releases + GraphQL), 50x
         shell: bash
         env:
-          GH_TOKEN_VALUE: ${{ github.token }}
+          TOKEN: ${{ github.token }}
         run: |
-          for i in 1 2 3; do
-            echo "::group::AUTH iteration $i"
-            rm -f "$HOME/.cargo/bin/cargo-codspeed"
-            start=$(date +%s.%N)
-            GITHUB_TOKEN="$GH_TOKEN_VALUE" cargo binstall --force --no-confirm --locked --log-level debug cargo-codspeed 2>&1 || true
-            end=$(date +%s.%N)
-            echo "RESULT runner=${{ matrix.runner }} mode=auth iteration=$i seconds=$(awk "BEGIN{print $end-$start}")"
-            echo "::endgroup::"
-          done
+          rest="https://api.github.com/repos/CodSpeedHQ/codspeed-rust/releases/tags/5.0.1"
+          gql="https://api.github.com/graphql"
+          fmt='attempt=%{http_code} dns=%{time_namelookup} conn=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total}\n'
 
-      - name: binstall resolve — WITHOUT token
-        shell: bash
-        run: |
-          for i in 1 2 3; do
-            echo "::group::NOAUTH iteration $i"
-            rm -f "$HOME/.cargo/bin/cargo-codspeed"
-            start=$(date +%s.%N)
-            env -u GITHUB_TOKEN -u GH_TOKEN cargo binstall --force --no-confirm --locked --log-level debug cargo-codspeed 2>&1 || true
-            end=$(date +%s.%N)
-            echo "RESULT runner=${{ matrix.runner }} mode=noauth iteration=$i seconds=$(awk "BEGIN{print $end-$start}")"
-            echo "::endgroup::"
+          echo "::group::REST releases/tags (authenticated), 50 calls, reusing nothing"
+          for i in $(seq 1 50); do
+            printf "REST i=%s " "$i"
+            curl -sS -o /dev/null -w "$fmt" --max-time 60 \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "User-Agent: latency-probe" "$rest"
           done
+          echo "::endgroup::"
+
+          echo "::group::GraphQL (authenticated), 50 calls"
+          q='{"query":"query { repository(owner:\"CodSpeedHQ\",name:\"codspeed-rust\") { release(tagName:\"5.0.1\") { releaseAssets(first:100) { nodes { name } } } } }"}'
+          for i in $(seq 1 50); do
+            printf "GQL i=%s " "$i"
+            curl -sS -o /dev/null -w "$fmt" --max-time 60 \
+              -X POST -H "Authorization: Bearer $TOKEN" \
+              -H "User-Agent: latency-probe" -d "$q" "$gql"
+          done
+          echo "::endgroup::"
+
+          echo "::group::rate limit headers"
+          curl -sS -D - -o /dev/null -H "Authorization: Bearer $TOKEN" -H "User-Agent: latency-probe" "$rest" | grep -i ratelimit || true
+          echo "::endgroup::"
