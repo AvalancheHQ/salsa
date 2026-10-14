@@ -1,0 +1,64 @@
+name: CodSpeed talk
+
+on:
+  push:
+    branches: ["talk/base-*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  BENCH_PACKAGE: 'salsa'
+  BENCH_TARGET: 'accumulator query_fetch'
+  BENCH_FILTER: 'accumulator|cached_same_revision'
+  BENCH_BUILD_ARGS: ''
+  BENCH_MODES: 'walltime,simulation,memory'
+  CARGO_CODSPEED_VERSION: '5.0.3'
+
+jobs:
+  benchmarks:
+    name: Benchmarks
+    runs-on: codspeed-macro-x64-ryzen-9950x-ubuntu-24-04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: talk-${{ env.BENCH_PACKAGE }}
+
+      # taiki-e/install-action needs /dev/fd, which Gen 2 runners lack.
+      - name: Install cargo-codspeed
+        run: |
+          bin="$(dirname "$(command -v cargo)")/cargo-codspeed"
+          curl -fsSL -o "$bin" "https://github.com/CodSpeedHQ/codspeed-rust/releases/download/v$CARGO_CODSPEED_VERSION/cargo-codspeed-x86_64-unknown-linux-musl"
+          chmod +x "$bin"
+
+      - name: Select bench targets
+        run: |
+          TARGET_ARGS=""
+          for t in $BENCH_TARGET; do TARGET_ARGS="$TARGET_ARGS --bench $t"; done
+          echo "TARGET_ARGS=$TARGET_ARGS" >> "$GITHUB_ENV"
+
+      - name: Build benchmarks
+        run: cargo codspeed build -p "$BENCH_PACKAGE" $TARGET_ARGS $BENCH_BUILD_ARGS -m "$BENCH_MODES"
+
+      - name: List selected walltime benchmarks
+        run: cargo codspeed run -p "$BENCH_PACKAGE" $TARGET_ARGS -m walltime "$BENCH_FILTER" -- --list
+
+      - uses: CodSpeedHQ/action@v5
+        id: codspeed
+        with:
+          mode: ${{ env.BENCH_MODES }}
+          run: cargo codspeed run -p "$BENCH_PACKAGE" $TARGET_ARGS "$BENCH_FILTER"
+
+      - name: Run id
+        run: echo "CodSpeed run id ${{ steps.codspeed.outputs.run-id }}"
